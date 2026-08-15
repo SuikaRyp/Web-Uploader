@@ -12,11 +12,13 @@ function toggleDropdown(e, id, url, name, histIdx) {
   const dd = document.getElementById(id);
   if (!dd) return;
   if (dd.style.display === 'block') { dd.style.display = 'none'; return; }
+  const safeUrl = escapeAttr(url);
+  const safeName = escapeAttr(name);
   dd.innerHTML = `
-    <div class="dropdown-item" onclick="copyLink('${url}',this);closeDropdowns()">📋 Copy Link</div>
-    <div class="dropdown-item" onclick="window.open('${url}','_blank');closeDropdowns()">↗ Open</div>
-    <div class="dropdown-item" onclick="dlFile('${url}','${name}');closeDropdowns()">⬇️ Download</div>
-    <div class="dropdown-item danger" onclick="deleteHistory(${histIdx})">🗑 Delete</div>`;
+    <div class="dropdown-item" onclick="copyLink('${safeUrl}',this);closeDropdowns()">📋 Copy Link</div>
+    <div class="dropdown-item" onclick="window.open('${safeUrl}','_blank');closeDropdowns()">↗ Open</div>
+    <div class="dropdown-item" onclick="dlFile('${safeUrl}','${safeName}');closeDropdowns()">⬇️ Download</div>
+    <div class="dropdown-item danger" onclick="deleteHistory(${Number(histIdx)})">🗑 Delete</div>`;
   dd.style.display = 'block';
 }
 function closeDropdowns() {
@@ -30,6 +32,7 @@ const BOTTOM_NAV_GROUPS = {
   upload:    'bn-tools',
   tiktok:    'bn-tools',
   instagram: 'bn-tools',
+  ytsearch:  'bn-tools',
   gallery:   'bn-log',
   settings:  'bn-info',
 };
@@ -63,7 +66,12 @@ dz.addEventListener('drop',      e => { e.preventDefault(); dz.classList.remove(
 
 function handleFiles(files) {
   if (!files.length) return;
+  const maxMb = (typeof MAX_UPLOAD_SIZE_MB !== 'undefined' && MAX_UPLOAD_SIZE_MB) || 25;
   Array.from(files).forEach(f => {
+    if (f.size > maxMb * 1024 * 1024) {
+      toast(`❌ ${f.name} > ${maxMb}MB, dilewati`, 'error');
+      return;
+    }
     if (!queue.find(q => q.file.name === f.name && q.file.size === f.size)) {
       queue.push({ file: f, id: Math.random().toString(36).slice(2), status: 'ready', progress: 0 });
     }
@@ -95,13 +103,13 @@ function renderQueue() {
     const labels = { ready: '⏳ Ready', uploading: '⬆️ ...', done: '✅ Done', error: '❌ Error' };
     const shortUrl = q.rawUrl ? (q.rawUrl.split('/').pop() || q.rawUrl) : '';
     const linkBoxHtml = q.rawUrl
-      ? `<div class="ql-box" id="ql-${q.id}" style="display:flex"><span class="ql-url" title="${q.rawUrl}">📎 ${shortUrl}</span><button class="ql-copy" onclick="copyLink('${q.rawUrl}',this)">📋</button><a class="ql-open" href="${q.rawUrl}" target="_blank">↗</a></div>`
+      ? `<div class="ql-box" id="ql-${q.id}" style="display:flex"><span class="ql-url" title="${escapeHtml(q.rawUrl)}">📎 ${escapeHtml(shortUrl)}</span><button class="ql-copy" onclick="copyLink('${escapeAttr(q.rawUrl)}',this)">📋</button><a class="ql-open" href="${escapeHtml(q.rawUrl)}" target="_blank">↗</a></div>`
       : `<div class="ql-box" id="ql-${q.id}" style="display:none"></div>`;
     return `<div class="queue-item" id="qi-${q.id}" style="flex-direction:column;align-items:stretch">
       <div style="display:flex;align-items:center;gap:14px">
         ${thumbHtml}
         <div class="q-info">
-          <div class="q-name">${q.file.name}</div>
+          <div class="q-name">${escapeHtml(q.file.name)}</div>
           <div class="q-size">${fmtSize(q.file.size)}</div>
           <div class="q-progress-wrap"><div class="q-progress" id="qp-${q.id}" style="width:${q.progress}%"></div></div>
         </div>
@@ -140,9 +148,9 @@ function updateQueueItem(item) {
     const shortUrl = item.rawUrl.split('/').pop() || item.rawUrl;
     linkBox.style.display = 'flex';
     linkBox.innerHTML = `
-      <span class="ql-url" title="${item.rawUrl}">📎 ${shortUrl}</span>
-      <button class="ql-copy" onclick="copyLink('${item.rawUrl}',this)">📋</button>
-      <a class="ql-open" href="${item.rawUrl}" target="_blank">↗</a>`;
+      <span class="ql-url" title="${escapeHtml(item.rawUrl)}">📎 ${escapeHtml(shortUrl)}</span>
+      <button class="ql-copy" onclick="copyLink('${escapeAttr(item.rawUrl)}',this)">📋</button>
+      <a class="ql-open" href="${escapeHtml(item.rawUrl)}" target="_blank">↗</a>`;
 
     // tampilkan video/audio player
     if (mediaEl) {
@@ -160,7 +168,7 @@ function updateQueueItem(item) {
           <div style="margin-top:12px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:12px;display:flex;align-items:center;gap:12px">
             <div style="font-size:28px">🎵</div>
             <div style="flex:1;min-width:0">
-              <div style="font-size:12px;font-weight:600;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${item.file.name}</div>
+              <div style="font-size:12px;font-weight:600;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(item.file.name)}</div>
               <audio controls style="width:100%;height:36px">
                 <source src="${item.rawUrl}" type="${item.file.type}">
               </audio>
@@ -194,6 +202,8 @@ function refreshStats() {
   renderRecentList();
   renderChart();
   updateConnectionStatus();
+  renderVisitorCount();
+  refreshVisitorCount();
 }
 
 
@@ -207,17 +217,20 @@ function renderRecentList() {
     const icon    = fileIcon(f.type);
     const date    = new Date(f.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
     const isMedia = f.type.startsWith('video/') || f.type.startsWith('audio/');
+    const safeUrl = escapeAttr(f.url);
+    const safeName = escapeAttr(f.name);
+    const safeType = escapeAttr(f.type);
     const clickFn = isMedia
-      ? `openMediaModal('${f.url}','${f.name.replace(/'/g,"\\'")}','${f.type}')`
-      : `window.open('${f.url}','_blank')`;
+      ? `openMediaModal('${safeUrl}','${safeName}','${safeType}')`
+      : `window.open('${safeUrl}','_blank')`;
     return `<div class="file-item" onclick="${clickFn}">
       <div class="file-thumb">${icon}</div>
       <div class="file-info">
-        <div class="file-name">${f.name}</div>
+        <div class="file-name">${escapeHtml(f.name)}</div>
         <div class="file-meta">${fmtSize(f.size)} · ${date}</div>
       </div>
       <span class="file-status status-ok">✓ Live</span>
-      <button class="dot-btn" onclick="event.stopPropagation();toggleDropdown(event,'dd-r-${i}','${f.url}','${f.name}',${i})">⋯</button>
+      <button class="dot-btn" onclick="event.stopPropagation();toggleDropdown(event,'dd-r-${i}','${safeUrl}','${safeName}',${i})">⋯</button>
       <div class="dropdown-menu" id="dd-r-${i}" style="display:none"></div>
     </div>`;
   }).join('');
@@ -239,26 +252,29 @@ function loadGallery() {
     const isAud  = f.type.startsWith('audio/');
     const icon   = fileIcon(f.type);
     const thumb  = isImg
-      ? `<img src="${f.url}" style="width:100%;height:120px;object-fit:cover;border-radius:10px 10px 0 0" loading="lazy" onerror="this.style.display='none'">`
+      ? `<img src="${escapeHtml(f.url)}" style="width:100%;height:120px;object-fit:cover;border-radius:10px 10px 0 0" loading="lazy" onerror="this.style.display='none'">`
       : isVid
       ? `<div style="height:120px;display:flex;align-items:center;justify-content:center;font-size:36px;background:rgba(124,58,237,0.08);border-radius:10px 10px 0 0;position:relative">🎬<span style="position:absolute;bottom:6px;right:8px;font-size:10px;background:rgba(0,0,0,0.6);padding:2px 6px;border-radius:4px;color:#fff">▶ Play</span></div>`
       : isAud
       ? `<div style="height:120px;display:flex;align-items:center;justify-content:center;font-size:36px;background:rgba(124,58,237,0.08);border-radius:10px 10px 0 0;position:relative">🎵<span style="position:absolute;bottom:6px;right:8px;font-size:10px;background:rgba(0,0,0,0.6);padding:2px 6px;border-radius:4px;color:#fff">▶ Play</span></div>`
       : `<div style="height:120px;display:flex;align-items:center;justify-content:center;font-size:36px;background:rgba(124,58,237,0.08);border-radius:10px 10px 0 0">${icon}</div>`;
+    const safeUrl = escapeAttr(f.url);
+    const safeName = escapeAttr(f.name);
+    const safeType = escapeAttr(f.type);
     const clickFn = (isVid || isAud)
-      ? `openMediaModal('${f.url}','${f.name.replace(/'/g,"\\'")}','${f.type}')`
-      : `window.open('${f.url}','_blank')`;
+      ? `openMediaModal('${safeUrl}','${safeName}','${safeType}')`
+      : `window.open('${safeUrl}','_blank')`;
     return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;cursor:pointer;transition:all 0.2s;position:relative"
       onmouseover="this.style.transform='translateY(-3px)';this.style.borderColor='rgba(124,58,237,0.4)'"
       onmouseout="this.style.transform='';this.style.borderColor='var(--border)'"
       onclick="${clickFn}">
       ${thumb}
       <div style="padding:10px 12px">
-        <div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${f.name}</div>
+        <div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(f.name)}</div>
         <div style="font-size:11px;color:var(--muted);margin-top:3px">${fmtSize(f.size)}</div>
       </div>
       <button class="dot-btn" style="position:absolute;top:6px;right:6px;background:rgba(10,10,15,0.7);backdrop-filter:blur(4px)"
-        onclick="event.stopPropagation();toggleDropdown(event,'dd-g-${i}','${f.url}','${f.name}',${i})">⋯</button>
+        onclick="event.stopPropagation();toggleDropdown(event,'dd-g-${i}','${safeUrl}','${safeName}',${i})">⋯</button>
       <div class="dropdown-menu" id="dd-g-${i}" style="display:none;top:34px;right:6px"></div>
     </div>`;
   }).join('');
@@ -271,16 +287,19 @@ function openMediaModal(url, name, type) {
   if (old) old.remove();
 
   const isVid = type.startsWith('video/');
+  const safeUrl = escapeHtml(url);
+  const safeName = escapeHtml(name);
+  const safeType = escapeHtml(type);
   const mediaEl = isVid
     ? `<video controls autoplay style="width:100%;max-height:320px;display:block;background:#000">
-        <source src="${url}" type="${type}">
+        <source src="${safeUrl}" type="${safeType}">
        </video>`
     : `<div style="padding:20px 16px;display:flex;align-items:center;gap:14px">
         <div style="font-size:40px">🎵</div>
         <div style="flex:1;min-width:0">
-          <div style="font-size:13px;font-weight:600;margin-bottom:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</div>
+          <div style="font-size:13px;font-weight:600;margin-bottom:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${safeName}</div>
           <audio controls autoplay style="width:100%">
-            <source src="${url}" type="${type}">
+            <source src="${safeUrl}" type="${safeType}">
           </audio>
         </div>
        </div>`;
@@ -291,14 +310,14 @@ function openMediaModal(url, name, type) {
   overlay.innerHTML = `
     <div class="media-modal">
       <div class="media-modal-header">
-        <div class="media-modal-title">${name}</div>
+        <div class="media-modal-title">${safeName}</div>
         <button class="media-modal-close" onclick="closeMediaModal()">✕</button>
       </div>
       <div class="media-modal-body">${mediaEl}</div>
       <div class="media-modal-footer">
-        <button class="tt-dl-btn primary" style="flex:1;justify-content:center" onclick="forceDownload('${url}','${name}')">⬇️ Download</button>
-        <button class="tt-dl-btn ghost" onclick="copyLink('${url}',this)">📋 Copy Link</button>
-        <a class="tt-dl-btn ghost" href="${url}" target="_blank">↗ Open</a>
+        <button class="tt-dl-btn primary" style="flex:1;justify-content:center" onclick="forceDownload('${escapeAttr(url)}','${escapeAttr(name)}')">⬇️ Download</button>
+        <button class="tt-dl-btn ghost" onclick="copyLink('${escapeAttr(url)}',this)">📋 Copy Link</button>
+        <a class="tt-dl-btn ghost" href="${safeUrl}" target="_blank">↗ Open</a>
       </div>
     </div>`;
   overlay.addEventListener('click', e => { if (e.target === overlay) closeMediaModal(); });
@@ -350,8 +369,8 @@ function updateConnectionStatus() {
         <span style="color:var(--success);font-weight:600">Connected</span>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-top:8px">
-        Repo: <b style="color:var(--text)">${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}</b><br>
-        Branch: <b style="color:var(--text)">${GITHUB_CONFIG.branch}</b> · Folder: <b style="color:var(--text)">${GITHUB_CONFIG.folder}</b>
+        Repo: <b style="color:var(--text)">${escapeHtml(GITHUB_CONFIG.owner)}/${escapeHtml(GITHUB_CONFIG.repo)}</b><br>
+        Branch: <b style="color:var(--text)">${escapeHtml(GITHUB_CONFIG.branch)}</b> · Folder: <b style="color:var(--text)">${escapeHtml(GITHUB_CONFIG.folder)}</b>
       </div>`;
   } else {
     el.innerHTML = `
@@ -374,8 +393,6 @@ function loadSettings() {
     document.getElementById('bg-preview').style.backgroundImage = `url(${bg})`;
     document.getElementById('bg-preview').innerHTML = '';
   }
-  const title = localStorage.getItem('suika_title') || 'SuikaUploader';
-  document.getElementById('app-title-input').value = title;
 }
 
 function previewBg() {
@@ -402,12 +419,6 @@ function clearBg() {
 function applyOverlay() {
   localStorage.setItem('suika_overlay', document.getElementById('overlay-input').value || 0.88);
   toast('Overlay updated', 'success');
-}
-function applyAppTitle() {
-  const t = document.getElementById('app-title-input').value.trim() || 'SuikaUploader';
-  document.title = t + ' — Media Hub';
-  localStorage.setItem('suika_title', t);
-  toast('Title updated!', 'success');
 }
 function clearAllData() {
   if (!confirm('Reset semua data? Ini menghapus history upload.')) return;
@@ -458,8 +469,7 @@ function toast(msg, type = 'info') {
 (function init() {
   const bg = localStorage.getItem('suika_bg');
   if (bg) document.getElementById('bg-layer').style.backgroundImage = `url(${bg})`;
-  const title = localStorage.getItem('suika_title');
-  if (title) document.title = title + ' — Media Hub';
   refreshStats();
+  initVisitorCounter();
 })();
 

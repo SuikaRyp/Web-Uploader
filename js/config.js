@@ -21,3 +21,34 @@ const IG_CONFIG = {
 };
 const CORS = "https://cors.yardansh.com/";
 
+
+const VISITOR_COUNTER = {
+  apiBase: 'https://countapi.mileshilliard.com/api/v1',
+  key: `suika_${(GITHUB_CONFIG.owner || 'anon')}_${(GITHUB_CONFIG.repo || 'app')}_visitors`.toLowerCase().replace(/[^a-z0-9_\-.]/g, '_'),
+};
+
+// ============================================================
+//  🔒 SECURITY SETTINGS
+// ============================================================
+// Batas ukuran upload per file (MB). Cegah upload file raksasa
+// yang bisa bikin GitHub API error / boros kuota repo.
+const MAX_UPLOAD_SIZE_MB = 25;
+
+// Deterrent kosmetik (block klik-kanan & shortcut DevTools).
+// PENTING: ini TIDAK menghentikan orang yang niat lihat source code —
+// F12/klik-kanan cuma salah satu cara buka DevTools, menu browser
+// (⋮ > More tools > Developer tools) selalu tetap bisa dipakai.
+// Set true kalau tetap mau aktifin.
+const SECURITY_UX_GUARD = false;
+
+const YT_DL_APIS = {
+  mp3: [
+    { url: 'https://api.davidcyriltech.my.id/download/ytmp3?url=' },
+    { url: 'https://api.siputzx.my.id/api/d/ytmp3?url=' },
+  ],
+  mp4: [
+    { url: 'https://api.davidcyriltech.my.id/download/ytmp4?url=' },
+    { url: 'https://api.siputzx.my.id/api/d/ytmp4?url=' },
+  ],
+};
+

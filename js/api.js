@@ -1,8 +1,3 @@
-// ============================================================
-//  API LAYER — GitHub upload/delete, TikTok & Instagram downloader
-// ============================================================
-
-
 function isConfigured() {
   return !!(
     GITHUB_CONFIG.owner && GITHUB_CONFIG.repo && GITHUB_CONFIG.token &&
@@ -241,9 +236,6 @@ async function igDownload() {
   btn.disabled = false;
 }
 
-// ============================================================
-//  TIKTOK DOWNLOADER
-
 async function forceDownload(url, filename) {
   try {
     toast('Memulai download...', 'info');
@@ -347,6 +339,187 @@ async function ttDownloadAll(images) {
   toast('Semua gambar diunduh!', 'success');
 }
 
+function escapeHtml(str) {
+  return String(str ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+function sanitizeFilename(name) {
+  return String(name || 'youtube').replace(/[^a-zA-Z0-9._\- ]/g, '').trim().slice(0, 80) || 'youtube';
+}
+
+// scrape halaman hasil pencarian YouTube (cara kerja yang sama dengan lib "yts")
+async function ytSearch() {
+  const q = document.getElementById('yt-search-input').value.trim();
+  if (!q) return toast('Masukkan kata kunci pencarian dulu!', 'error');
+
+  const resultEl = document.getElementById('yt-search-result');
+  const btn      = document.getElementById('yt-search-btn');
+  btn.disabled   = true;
+  resultEl.innerHTML = `<div class="tt-loading"><div class="spinner"></div>Mencari di YouTube...</div>`;
+
+  try {
+    const res  = await fetch(CORS + 'https://www.youtube.com/results?search_query=' + encodeURIComponent(q) + '&hl=en', {
+      headers: { 'Accept-Language': 'en-US,en;q=0.9' }
+    });
+    const html = await res.text();
+
+    const match = html.match(/var ytInitialData\s*=\s*(\{.+?\});<\/script>/s);
+    if (!match) throw new Error('Gagal parsing hasil pencarian');
+    const data = JSON.parse(match[1]);
+
+    const sections = data?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents || [];
+    const videos = [];
+    for (const section of sections) {
+      const items = section?.itemSectionRenderer?.contents || [];
+      for (const item of items) {
+        const v = item.videoRenderer;
+        if (!v || !v.videoId) continue;
+        videos.push({
+          videoId:   v.videoId,
+          title:     v.title?.runs?.[0]?.text || v.title?.simpleText || 'Tidak tersedia',
+          channel:   v.ownerText?.runs?.[0]?.text || v.longBylineText?.runs?.[0]?.text || 'Tidak tersedia',
+          duration:  v.lengthText?.simpleText || 'LIVE',
+          views:     v.viewCountText?.simpleText || v.shortViewCountText?.simpleText || '',
+          published: v.publishedTimeText?.simpleText || '',
+          thumbnail: v.thumbnail?.thumbnails?.slice(-1)?.[0]?.url || `https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`,
+        });
+        if (videos.length >= 15) break;
+      }
+      if (videos.length >= 15) break;
+    }
+
+    if (!videos.length) {
+      resultEl.innerHTML = `<div class="glass-card" style="text-align:center;padding:32px;color:var(--error)">❌ Tidak ada hasil untuk "${escapeHtml(q)}"</div>`;
+      btn.disabled = false;
+      return;
+    }
+
+    resultEl.innerHTML = `<div class="yt-grid">${videos.map(renderYtCard).join('')}</div>`;
+  } catch (e) {
+    resultEl.innerHTML = `<div class="glass-card" style="text-align:center;padding:32px;color:var(--error)">❌ Error: ${escapeHtml(e.message)}</div>`;
+  }
+  btn.disabled = false;
+}
+
+function renderYtCard(v) {
+  const safeTitle = escapeHtml(v.title);
+  const safeChannel = escapeHtml(v.channel);
+  const meta = [v.channel, v.views, v.published].filter(Boolean).map(escapeHtml).join(' · ');
+  return `
+    <div class="yt-card">
+      <div class="yt-thumb-wrap">
+        <img src="${v.thumbnail}" loading="lazy" alt="${safeTitle}">
+        <span class="yt-duration-badge">${escapeHtml(v.duration)}</span>
+      </div>
+      <div class="yt-card-body">
+        <div class="yt-card-title" title="${safeTitle}">${safeTitle}</div>
+        <div class="yt-card-meta">${meta}</div>
+        <div class="yt-card-actions">
+          <button class="tt-dl-btn primary" onclick="ytDownload('${v.videoId}','${safeTitle.replace(/'/g, "\\'")}','mp4',this)">⬇️ MP4</button>
+          <button class="tt-dl-btn ghost" onclick="ytDownload('${v.videoId}','${safeTitle.replace(/'/g, "\\'")}','mp3',this)">🎵 MP3</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function ytDownload(videoId, title, type, btn) {
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:middle"></span>`;
+
+  const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const endpoints = YT_DL_APIS[type] || [];
+
+  let downloadUrl = null;
+  for (const ep of endpoints) {
+    try {
+      const res  = await fetch(CORS + ep.url + encodeURIComponent(videoUrl));
+      const json = await res.json();
+      downloadUrl = extractYtDownloadUrl(json);
+      if (downloadUrl) break;
+    } catch (e) { /* coba endpoint berikutnya */ }
+  }
+
+  if (downloadUrl) {
+    await forceDownload(downloadUrl, `${sanitizeFilename(title)}.${type}`);
+  } else {
+    toast(`❌ Gagal download ${type.toUpperCase()}. API downloader mungkin sedang down — coba lagi nanti atau ganti endpoint di config.js`, 'error');
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = original;
+}
+
+// beberapa API publik punya bentuk response berbeda-beda, jadi dicoba beberapa kemungkinan path umum
+function extractYtDownloadUrl(json) {
+  if (!json) return null;
+  const candidates = [
+    json?.result?.download?.url,
+    json?.result?.downloadUrl,
+    json?.result?.download,
+    json?.result?.url,
+    json?.result?.mp3,
+    json?.result?.mp4,
+    json?.data?.download?.url,
+    json?.data?.downloadUrl,
+    json?.data?.url,
+    json?.download?.url,
+    json?.downloadUrl,
+    json?.url,
+    json?.dl_link,
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.startsWith('http')) return c;
+  }
+  return null;
+}
+
+// ============================================================
+//  VISITOR COUNTER
+// ============================================================
+
+// dipanggil sekali saat app dimuat: increment cuma 1x per sesi browser,
+// tapi selalu refresh angka yang ditampilkan
+async function initVisitorCounter() {
+  const alreadyCounted = sessionStorage.getItem('suika_visit_counted');
+  try {
+    if (!alreadyCounted) {
+      const res  = await fetch(`${VISITOR_COUNTER.apiBase}/hit/${VISITOR_COUNTER.key}`);
+      const data = await res.json();
+      const val  = data.value ?? data.count;
+      if (typeof val === 'number') {
+        localStorage.setItem('suika_visit_cache', val);
+        sessionStorage.setItem('suika_visit_counted', '1');
+      }
+    } else {
+      const res  = await fetch(`${VISITOR_COUNTER.apiBase}/get/${VISITOR_COUNTER.key}`);
+      const data = await res.json();
+      const val  = data.value ?? data.count;
+      if (typeof val === 'number') localStorage.setItem('suika_visit_cache', val);
+    }
+  } catch (e) {
+    // API lagi down, biarin pake cache localStorage terakhir
+  }
+  renderVisitorCount();
+}
+
+function renderVisitorCount() {
+  const el = document.getElementById('stat-visitors');
+  if (!el) return;
+  const cached = localStorage.getItem('suika_visit_cache');
+  el.textContent = cached !== null ? cached : '—';
+}
+
+async function refreshVisitorCount() {
+  try {
+    const res  = await fetch(`${VISITOR_COUNTER.apiBase}/get/${VISITOR_COUNTER.key}`);
+    const data = await res.json();
+    const val  = data.value ?? data.count;
+    if (typeof val === 'number') localStorage.setItem('suika_visit_cache', val);
+  } catch (e) { /* pakai cache lama */ }
+  renderVisitorCount();
+}
+
 // ============================================================
 //  NAVIGATION
 // ============================================================
@@ -428,5 +601,4 @@ async function uploadFile(item) {
 
   updateQueueItem(item);
 }
-
 
